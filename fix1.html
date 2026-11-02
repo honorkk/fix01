@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>設備資產管理系統</title>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    :root {
+      --primary: #0284c7;
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #22c55e;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 12px; min-height: 100vh; display: flex; justify-content: center; }
+    .app { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 12px; }
+
+    /* 頂部分頁切換 */
+    .tab-bar {
+      display: flex;
+      background: var(--card);
+      border-radius: 10px;
+      padding: 4px;
+      border: 1px solid var(--border);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: 0.2s;
+    }
+    .tab-btn.active {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    /* 掃描相機視窗 */
+    #reader {
+      width: 100%;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 2px dashed #0284c7;
+      background: #000;
+      margin-bottom: 8px;
+    }
+
+    .form-group { margin-top: 10px; }
+    label { display: block; font-size: 13px; font-weight: 600; color: #cbd5e1; margin-bottom: 4px; }
+    input[type="text"], select {
+      width: 100%;
+      padding: 10px 12px;
+      background: #0f172a;
+      border: 1.5px solid var(--border);
+      color: #fff;
+      border-radius: 8px;
+      font-size: 15px;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: #38bdf8; }
+
+    /* 照片上傳與預覽 */
+    .photo-preview-box {
+      width: 100%;
+      height: 140px;
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+      background: #0f172a;
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    .photo-preview-box img { width: 100%; height: 100%; object-fit: cover; display: none; }
+    .photo-placeholder { font-size: 13px; color: var(--text-muted); }
+
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+      margin-top: 12px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 6px;
+      transition: 0.15s;
+    }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: #0369a1; }
+    .btn-success { background: var(--success); color: #052e16; }
+    .btn-sm { padding: 6px 12px; font-size: 13px; width: auto; background: #334155; color: #fff; }
+
+    .status-msg {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      display: none;
+    }
+    .msg-success { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+    .msg-error { background: #450a0a; color: #f87171; border: 1px solid #991b1b; }
+
+    /* 查詢結果卡片 */
+    .result-view {
+      margin-top: 12px;
+      padding: 12px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: none;
+      line-height: 1.8;
+      font-size: 14px;
+    }
+    .result-view strong { color: #38bdf8; }
+    .asset-img-display {
+      width: 100%;
+      max-height: 200px;
+      object-fit: cover;
+      border-radius: 6px;
+      margin-top: 8px;
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <!-- 頁籤選單 -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('tab-add')">➕ 新增設備建檔</button>
+    <button class="tab-btn" onclick="switchTab('tab-search')">🔍 掃描查詢/盤點</button>
+  </div>
+
+  <!-- 相機區 (共用) -->
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <span style="font-weight:bold; font-size:14px; color:#38bdf8;">📷 鏡頭掃描條碼</span>
+      <button class="btn btn-sm" onclick="restartCamera()">重啟鏡頭</button>
+    </div>
+    <div id="reader"></div>
+    <div style="font-size:12px; color:var(--text-muted); text-align:center;">支援 Code 128、Code 39 與 QR Code</div>
+  </div>
+
+  <!-- 分頁 1：新增設備 -->
+  <div id="tab-add" class="card">
+    <h3 style="font-size:16px; margin-bottom:4px;">📦 設備詳細資料</h3>
+
+    <div class="form-group">
+      <label>資產/財產編號</label>
+      <input type="text" id="addAssetId" placeholder="鏡頭掃描或直接手動輸入">
+    </div>
+
+    <div class="form-group">
+      <label>設備類別</label>
+      <select id="addName">
+        <option value="主機 PC">主機 PC</option>
+        <option value="液晶螢幕">液晶螢幕</option>
+        <option value="筆記型電腦">筆記型電腦</option>
+        <option value="網路印表機">網路印表機</option>
+        <option value="網路交換器 Switch">網路交換器 Switch</option>
+        <option value="其他周邊">其他周邊</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>廠牌型號 / 規格</label>
+      <input type="text" id="addSpec" placeholder="例: ASUS D700SER / i7 / 16G">
+    </div>
+
+    <div class="form-group">
+      <label>放置地點 / 使用人</label>
+      <input type="text" id="addLocation" placeholder="例: 3F 資訊科 / 機房">
+    </div>
+
+    <!-- 圖片上傳 -->
+    <div class="form-group">
+      <label>設備照片 (可拍照或選相簿)</label>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" onchange="handlePhotoSelect(event)" style="font-size:13px;">
+      <div class="photo-preview-box" id="previewBox">
+        <span class="photo-placeholder" id="photoPlaceholder">尚無預覽照片</span>
+        <img id="previewImg" alt="預覽">
+      </div>
+    </div>
+
+    <button class="btn btn-primary" id="btnAddSubmit" onclick="submitNewAsset()">新增並存入試算表</button>
+    <div class="status-msg" id="addStatus"></div>
+  </div>
+
+  <!-- 分頁 2：查詢與盤點 -->
+  <div id="tab-search" class="card" style="display:none;">
+    <h3 style="font-size:16px; margin-bottom:4px;">🔍 查詢與狀態更新</h3>
+
+    <div class="form-group">
+      <label>請掃描或輸入要查詢的編號</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="searchAssetId" placeholder="輸入編號">
+        <button class="btn btn-primary" style="width:80px; margin:0;" onclick="fetchAssetDetail()">查詢</button>
+      </div>
+    </div>
+
+    <div class="status-msg" id="searchStatus"></div>
+
+    <!-- 查詢結果資訊卡 -->
+    <div class="result-view" id="resultCard">
+      <div><strong>財產編號：</strong><span id="resId"></span></div>
+      <div><strong>設備名稱：</strong><span id="resName"></span></div>
+      <div><strong>型號規格：</strong><span id="resSpec"></span></div>
+      <div><strong>放置地點：</strong><span id="resLocation"></span></div>
+      <div><strong>盤點狀態：</strong><span id="resStatus" style="font-weight:bold; color:#4ade80;"></span></div>
+      <div id="resPhotoBox" style="display:none;">
+        <strong style="display:block; margin-top:6px;">設備照片：</strong>
+        <img id="resPhoto" class="asset-img-display" src="" alt="設備照片">
+      </div>
+
+      <button class="btn btn-success" style="margin-top:12px;" onclick="markAsAudited()">✔ 標記為已盤點</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// 請替換為你的 Google Apps Script Web App /exec 網址
+const GAS_API_URL = "https://script.google.com/macros/s/AKfycbzZwm0jdYx8hPyWHBWkkj3-zj3JU5PZwdi35Cuh6eap4xqilK-4EUWvLDZkWP2YKUew/exec";
+
+let currentTab = "tab-add";
+let base64Image = "";
+
+// Web Audio 逼聲
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playBeep() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(2400, audioCtx.currentTime);
+  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.08);
+}
+
+// 分頁切換
+function switchTab(tabId) {
+  currentTab = tabId;
+  document.querySelectorAll(".tab-btn").forEach((btn, idx) => {
+    btn.classList.toggle("active", (idx === 0 && tabId === "tab-add") || (idx === 1 && tabId === "tab-search"));
+  });
+  document.getElementById("tab-add").style.display = tabId === "tab-add" ? "block" : "none";
+  document.getElementById("tab-search").style.display = tabId === "tab-search" ? "block" : "none";
+}
+
+// 圖片壓縮並轉為 Base64（避免手機直出 10MB 爆流量，自動壓到 800px 寬度以內）
+function handlePhotoSelect(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      const canvas = document.createElement("canvas");
+      const maxW = 800;
+      let w = img.width, h = img.height;
+      if (w > maxW) {
+        h = Math.round((h * maxW) / w);
+        w = maxW;
+      }
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+
+      base64Image = canvas.toDataURL("image/jpeg", 0.7);
+      document.getElementById("previewImg").src = base64Image;
+      document.getElementById("previewImg").style.display = "block";
+      document.getElementById("photoPlaceholder").style.display = "none";
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// 相機條碼掃描
+let html5QrCode = null;
+function startCamera() {
+  html5QrCode = new Html5Qrcode("reader");
+  html5QrCode.start(
+    { facingMode: "environment" },
+    { fps: 15, qrbox: { width: 260, height: 160 } },
+    (decodedText) => {
+      playBeep();
+      if (currentTab === "tab-add") {
+        document.getElementById("addAssetId").value = decodedText;
+        showMsg("addStatus", `已讀取條碼：${decodedText}`, "success");
+      } else {
+        document.getElementById("searchAssetId").value = decodedText;
+        fetchAssetDetail(); // 查詢頁直接自動查詢
+      }
+    },
+    () => {}
+  ).catch(err => {
+    console.warn(err);
+  });
+}
+
+function restartCamera() {
+  if (html5QrCode) {
+    html5QrCode.stop().then(() => startCamera()).catch(() => startCamera());
+  } else {
+    startCamera();
+  }
+}
+
+// 1. 新增資產存入試算表
+async function submitNewAsset() {
+  const assetId = document.getElementById("addAssetId").value.trim();
+  const name = document.getElementById("addName").value;
+  const spec = document.getElementById("addSpec").value.trim();
+  const location = document.getElementById("addLocation").value.trim();
+  const btn = document.getElementById("btnAddSubmit");
+
+  if (!assetId) {
+    alert("請先掃描或輸入資產編號！");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerText = "資料與照片上傳中...";
+  showMsg("addStatus", "正在儲存資料與照片至雲端...", "success");
+
+  const payload = {
+    action: "add",
+    assetId: assetId,
+    name: name,
+    spec: spec,
+    location: location,
+    imageBase64: base64Image,
+    imageType: "image/jpeg"
+  };
+
+  try {
+    const res = await fetch(GAS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    const result = await res.json();
+
+    if (result.success) {
+      showMsg("addStatus", `✅ [${assetId}] 已成功建立！照片已上傳。`, "success");
+      // 重置欄位
+      document.getElementById("addAssetId").value = "";
+      document.getElementById("addSpec").value = "";
+      document.getElementById("previewImg").style.display = "none";
+      document.getElementById("photoPlaceholder").style.display = "block";
+      base64Image = "";
+    } else {
+      showMsg("addStatus", `❌ ${result.message}`, "error");
+    }
+  } catch (err) {
+    showMsg("addStatus", "上傳失敗：" + err.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "新增並存入試算表";
+  }
+}
+
+// 2. 查詢資產資料
+async function fetchAssetDetail() {
+  const assetId = document.getElementById("searchAssetId").value.trim();
+  if (!assetId) {
+    alert("請輸入或掃描資產編號！");
+    return;
+  }
+
+  showMsg("searchStatus", "查詢中...", "success");
+  document.getElementById("resultCard").style.display = "none";
+
+  try {
+    const res = await fetch(`${GAS_API_URL}?assetId=${encodeURIComponent(assetId)}`);
+    const result = await res.json();
+
+    if (result.success) {
+      document.getElementById("searchStatus").style.display = "none";
+      const item = result.data;
+      document.getElementById("resId").innerText = item.assetId;
+      document.getElementById("resName").innerText = item.name;
+      document.getElementById("resSpec").innerText = item.spec;
+      document.getElementById("resLocation").innerText = item.location;
+      document.getElementById("resStatus").innerText = item.status;
+
+      if (item.photoUrl && item.photoUrl.startsWith("http")) {
+        // 將 Google Drive 分享連結轉為直接圖片檢視連結
+        const fileId = item.photoUrl.split("/d/")[1]?.split("/")[0];
+        document.getElementById("resPhoto").src = fileId ? `https://drive.google.com/thumbnail?id=${fileId}&sz=w600` : item.photoUrl;
+        document.getElementById("resPhotoBox").style.display = "block";
+      } else {
+        document.getElementById("resPhotoBox").style.display = "none";
+      }
+
+      document.getElementById("resultCard").style.display = "block";
+    } else {
+      showMsg("searchStatus", `❌ ${result.message}`, "error");
+    }
+  } catch (err) {
+    showMsg("searchStatus", "查詢連線失敗：" + err.message, "error");
+  }
+}
+
+// 3. 標記盤點
+async function markAsAudited() {
+  const assetId = document.getElementById("resId").innerText;
+  try {
+    const res = await fetch(GAS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "updateStatus", assetId: assetId })
+    });
+    const result = await res.json();
+    if (result.success) {
+      alert("✅ 盤點成功！試算表狀態已更新。");
+      document.getElementById("resStatus").innerText = "已盤點 (剛剛)";
+    } else {
+      alert("更新失敗：" + result.message);
+    }
+  } catch (err) {
+    alert("連線失敗：" + err.message);
+  }
+}
+
+function showMsg(id, text, type) {
+  const el = document.getElementById(id);
+  el.style.display = "block";
+  el.className = `status-msg ${type === 'success' ? 'msg-success' : 'msg-error'}`;
+  el.innerText = text;
+}
+
+window.addEventListener("load", startCamera);
+</script>
+
+</body>
+</html>
