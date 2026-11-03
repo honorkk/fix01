@@ -61,9 +61,10 @@
       background: #000;
       margin-bottom: 8px;
       position: relative;
+      min-height: 200px;
     }
 
-    /* iOS 專屬畫面優化 */
+    /* iOS / Android 鏡頭畫面防變形優化 */
     #reader video {
       width: 100% !important;
       height: 100% !important;
@@ -130,6 +131,7 @@
       border-radius: 6px;
       font-size: 13px;
       display: none;
+      word-break: break-all;
     }
     .msg-success { background: #052e16; color: #4ade80; border: 1px solid #166534; }
     .msg-error { background: #450a0a; color: #f87171; border: 1px solid #991b1b; }
@@ -169,11 +171,11 @@
   <div class="card" id="cameraCard">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
       <span style="font-weight:bold; font-size:14px; color:#38bdf8;">📷 鏡頭掃描條碼</span>
-      <button class="btn btn-sm" onclick="restartCamera()">重啟鏡頭</button>
+      <button class="btn btn-sm" onclick="restartCamera()">手動啟動/重啟</button>
     </div>
     <div id="reader"></div>
     <button class="btn btn-resume" id="btnResumeScan" onclick="resumeCamera()">▶ 繼續掃描下一件</button>
-    <div style="font-size:12px; color:var(--text-muted); text-align:center; margin-top:4px;">支援 Code 128、Code 39、QR Code 及 USB 掃描槍</div>
+    <div style="font-size:12px; color:var(--text-muted); text-align:center; margin-top:4px;">支援手機鏡頭與 PC 外接掃描槍</div>
   </div>
 
   <!-- 分頁 1：新增設備 -->
@@ -181,8 +183,8 @@
     <h3 style="font-size:16px; margin-bottom:4px;">📦 設備詳細資料</h3>
 
     <div class="form-group">
-      <label>資產/財產編號 (支援條碼槍掃描)</label>
-      <input type="text" id="addAssetId" placeholder="鏡頭掃描、條碼槍掃描或手動輸入" autocomplete="off">
+      <label>資產/財產編號 (支援條碼槍)</label>
+      <input type="text" id="addAssetId" placeholder="掃描或直接輸入編號" autocomplete="off">
     </div>
 
     <div class="form-group">
@@ -226,7 +228,7 @@
     <h3 style="font-size:16px; margin-bottom:4px;">🔍 查詢與狀態更新</h3>
 
     <div class="form-group">
-      <label>請掃描或輸入要查詢的編號 (支援條碼槍掃描)</label>
+      <label>請掃描或輸入要查詢的編號 (支援條碼槍)</label>
       <div style="display:flex; gap:8px;">
         <input type="text" id="searchAssetId" placeholder="輸入或條碼槍直接掃入" autocomplete="off">
         <button class="btn btn-primary" style="width:80px; margin:0;" onclick="fetchAssetDetail()">查詢</button>
@@ -292,7 +294,7 @@ function playBeep() {
   }
 }
 
-// 分頁切換與自動聚焦
+// 分頁切換
 function switchTab(tabId) {
   getAudioContext();
 
@@ -307,7 +309,6 @@ function switchTab(tabId) {
   focusTargetInput();
 }
 
-// 聚焦函式：切換分頁或完成操作後，自動把游標聚焦回對應條碼輸入框
 function focusTargetInput() {
   setTimeout(() => {
     if (currentTab === "tab-add") {
@@ -351,8 +352,16 @@ function handlePhotoSelect(event) {
   reader.readAsDataURL(file);
 }
 
-// 相機條碼掃描（支援 iOS/Android，並容錯 PC 無鏡頭環境）
+// 相機條碼掃描核心（加入安全環境檢查與階梯式降級）
 function startCamera() {
+  // 1. 安全連線檢查 (HTTPS 或 localhost)
+  const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (!isSecure) {
+    const msg = "⚠️ 手機鏡頭限制：網址必須以 HTTPS 開頭才能啟用相機。目前連線為非加密環境，請改用 HTTPS 網址開啟（PC 條碼槍可照常使用）。";
+    showMsg(currentTab === "tab-add" ? "addStatus" : "searchStatus", msg, "error");
+    return;
+  }
+
   if (!html5QrCode) {
     const formatsToSupport = [
       Html5QrcodeSupportedFormats.CODE_128,
@@ -363,10 +372,7 @@ function startCamera() {
 
     html5QrCode = new Html5Qrcode("reader", {
       formatsToSupport: formatsToSupport,
-      verbose: false,
-      experimentalFeatures: {
-        useBarCodeDetectorIfSupported: true
-      }
+      verbose: false
     });
   }
 
@@ -376,49 +382,59 @@ function startCamera() {
     return { width: qrboxWidth, height: qrboxHeight };
   };
 
-  const videoConstraints = {
-    facingMode: { ideal: "environment" },
-    width: { ideal: 1920, min: 1280 },
-    height: { ideal: 1080, min: 720 },
-    advanced: [{ focusMode: "continuous" }]
+  const cameraConfig = {
+    fps: 12,
+    qrbox: qrboxFunction,
+    aspectRatio: 1.0
   };
 
-  html5QrCode.start(
-    videoConstraints,
-    {
-      fps: 12,
-      qrbox: qrboxFunction,
-      aspectRatio: 1.0
-    },
-    (decodedText) => {
-      if (isCoolingDown) return;
+  const onScanSuccess = (decodedText) => {
+    if (isCoolingDown) return;
 
-      isCoolingDown = true;
-      playBeep();
+    isCoolingDown = true;
+    playBeep();
 
-      try {
-        if (html5QrCode.getState() === Html5QrcodeScannerState.SCANNING) {
-          html5QrCode.pause();
-        }
-      } catch (err) {
-        console.warn(err);
+    try {
+      if (html5QrCode.getState() === Html5QrcodeScannerState.SCANNING) {
+        html5QrCode.pause();
+      }
+    } catch (err) {
+      console.warn(err);
+    }
+
+    document.getElementById("btnResumeScan").style.display = "block";
+
+    if (currentTab === "tab-add") {
+      document.getElementById("addAssetId").value = decodedText;
+      showMsg("addStatus", `✅ 已鎖定條碼：${decodedText}（已暫停掃描）`, "success");
+    } else {
+      document.getElementById("searchAssetId").value = decodedText;
+      fetchAssetDetail();
+    }
+  };
+
+  // 嘗試啟動封裝函式
+  const runStart = (constraints) => html5QrCode.start(constraints, cameraConfig, onScanSuccess, () => {});
+
+  // 第一階段：優先嘗試後置相機 (寬鬆約束避免 OverconstrainedError)
+  runStart({ facingMode: "environment" })
+    .catch((err) => {
+      console.warn("後置鏡頭啟動失敗，嘗試降級啟動預設鏡頭...", err);
+      // 第二階段：降級至前置或任意可用鏡頭
+      return runStart({ facingMode: "user" });
+    })
+    .catch((finalErr) => {
+      console.warn("相機無法啟動：", finalErr);
+      let tip = "相機啟動失敗：" + (finalErr.name || finalErr.message);
+
+      if (finalErr.name === "NotAllowedError" || finalErr.name === "PermissionDeniedError") {
+        tip = "❌ 鏡頭權限被拒絕。請至手機「設定 > Safari / Chrome」開啟相機存取授權後重新整理。";
+      } else if (finalErr.name === "NotFoundError" || finalErr.name === "DevicesNotFoundError") {
+        tip = "ℹ️ 未偵測到可用相機（若為 PC，可直接使用實體條碼槍掃描）。";
       }
 
-      document.getElementById("btnResumeScan").style.display = "block";
-
-      if (currentTab === "tab-add") {
-        document.getElementById("addAssetId").value = decodedText;
-        showMsg("addStatus", `✅ 已鎖定條碼：${decodedText}（已暫停掃描）`, "success");
-      } else {
-        document.getElementById("searchAssetId").value = decodedText;
-        fetchAssetDetail();
-      }
-    },
-    () => {}
-  ).catch(err => {
-    // 若為桌上型 PC 或使用者未授予相機權限，維持正常輸入功能，不噴出阻斷性報錯
-    console.warn("未偵測到相機或相機權限受限（PC 條碼槍可照常使用）:", err);
-  });
+      showMsg(currentTab === "tab-add" ? "addStatus" : "searchStatus", tip, "error");
+    });
 }
 
 // 恢復掃描
@@ -436,6 +452,7 @@ function resumeCamera() {
 
 // 重啟相機
 function restartCamera() {
+  getAudioContext();
   if (html5QrCode && html5QrCode.isScanning) {
     html5QrCode.stop().then(() => {
       isCoolingDown = false;
@@ -574,12 +591,13 @@ async function markAsAudited() {
 
 function showMsg(id, text, type) {
   const el = document.getElementById(id);
+  if (!el) return;
   el.style.display = "block";
   el.className = `status-msg ${type === 'success' ? 'msg-success' : 'msg-error'}`;
   el.innerText = text;
 }
 
-// PC 條碼槍鍵盤監聽與初始化
+// 頁面載入與 PC 條碼槍 Enter 監聽
 window.addEventListener("load", () => {
   startCamera();
   focusTargetInput();
@@ -587,7 +605,6 @@ window.addEventListener("load", () => {
   const addInput = document.getElementById("addAssetId");
   const searchInput = document.getElementById("searchAssetId");
 
-  // 新增模式：條碼槍掃描後帶出 Enter，自動跳到下一欄位填寫規格
   if (addInput) {
     addInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -598,7 +615,6 @@ window.addEventListener("load", () => {
     });
   }
 
-  // 查詢模式：條碼槍掃描後帶出 Enter，直接自動發送查詢
   if (searchInput) {
     searchInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
