@@ -60,6 +60,16 @@
       border: 2px dashed #0284c7;
       background: #000;
       margin-bottom: 8px;
+      position: relative;
+    }
+
+    /* iOS 專屬畫面優化 */
+    #reader video {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover !important;
+      border-radius: 6px;
+      -webkit-transform: translateZ(0);
     }
 
     .form-group { margin-top: 10px; }
@@ -156,14 +166,14 @@
   </div>
 
   <!-- 相機區 (共用) -->
-  <div class="card">
+  <div class="card" id="cameraCard">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
       <span style="font-weight:bold; font-size:14px; color:#38bdf8;">📷 鏡頭掃描條碼</span>
       <button class="btn btn-sm" onclick="restartCamera()">重啟鏡頭</button>
     </div>
     <div id="reader"></div>
     <button class="btn btn-resume" id="btnResumeScan" onclick="resumeCamera()">▶ 繼續掃描下一件</button>
-    <div style="font-size:12px; color:var(--text-muted); text-align:center; margin-top:4px;">支援 Code 128、Code 39 與 QR Code</div>
+    <div style="font-size:12px; color:var(--text-muted); text-align:center; margin-top:4px;">支援 Code 128、Code 39、QR Code 及 USB 掃描槍</div>
   </div>
 
   <!-- 分頁 1：新增設備 -->
@@ -171,8 +181,8 @@
     <h3 style="font-size:16px; margin-bottom:4px;">📦 設備詳細資料</h3>
 
     <div class="form-group">
-      <label>資產/財產編號</label>
-      <input type="text" id="addAssetId" placeholder="鏡頭掃描或直接手動輸入">
+      <label>資產/財產編號 (支援條碼槍掃描)</label>
+      <input type="text" id="addAssetId" placeholder="鏡頭掃描、條碼槍掃描或手動輸入" autocomplete="off">
     </div>
 
     <div class="form-group">
@@ -216,9 +226,9 @@
     <h3 style="font-size:16px; margin-bottom:4px;">🔍 查詢與狀態更新</h3>
 
     <div class="form-group">
-      <label>請掃描或輸入要查詢的編號</label>
+      <label>請掃描或輸入要查詢的編號 (支援條碼槍掃描)</label>
       <div style="display:flex; gap:8px;">
-        <input type="text" id="searchAssetId" placeholder="輸入編號">
+        <input type="text" id="searchAssetId" placeholder="輸入或條碼槍直接掃入" autocomplete="off">
         <button class="btn btn-primary" style="width:80px; margin:0;" onclick="fetchAssetDetail()">查詢</button>
       </div>
     </div>
@@ -252,31 +262,62 @@ let base64Image = "";
 let isCoolingDown = false;
 let html5QrCode = null;
 
-// Web Audio 逼聲
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-function playBeep() {
-  if (audioCtx.state === 'suspended') audioCtx.resume();
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(2400, audioCtx.currentTime);
-  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-  osc.start();
-  osc.stop(audioCtx.currentTime + 0.08);
+// iOS Safari / PC 延遲初始化 Web Audio
+let audioCtx = null;
+function getAudioContext() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  return audioCtx;
 }
 
-// 分頁切換
+function playBeep() {
+  try {
+    const ctx = getAudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(2400, ctx.currentTime);
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.08);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.08);
+  } catch (e) {
+    console.warn("音訊播放略過:", e);
+  }
+}
+
+// 分頁切換與自動聚焦
 function switchTab(tabId) {
+  getAudioContext();
+
   currentTab = tabId;
   document.querySelectorAll(".tab-btn").forEach((btn, idx) => {
     btn.classList.toggle("active", (idx === 0 && tabId === "tab-add") || (idx === 1 && tabId === "tab-search"));
   });
   document.getElementById("tab-add").style.display = tabId === "tab-add" ? "block" : "none";
   document.getElementById("tab-search").style.display = tabId === "tab-search" ? "block" : "none";
-  resumeCamera(); // 切換分頁時恢復掃描
+  
+  resumeCamera();
+  focusTargetInput();
+}
+
+// 聚焦函式：切換分頁或完成操作後，自動把游標聚焦回對應條碼輸入框
+function focusTargetInput() {
+  setTimeout(() => {
+    if (currentTab === "tab-add") {
+      const el = document.getElementById("addAssetId");
+      if (el) { el.focus(); el.select(); }
+    } else {
+      const el = document.getElementById("searchAssetId");
+      if (el) { el.focus(); el.select(); }
+    }
+  }, 100);
 }
 
 // 圖片壓縮並轉為 Base64
@@ -310,22 +351,51 @@ function handlePhotoSelect(event) {
   reader.readAsDataURL(file);
 }
 
-// 相機條碼掃描（單次鎖定）
+// 相機條碼掃描（支援 iOS/Android，並容錯 PC 無鏡頭環境）
 function startCamera() {
   if (!html5QrCode) {
-    html5QrCode = new Html5Qrcode("reader");
+    const formatsToSupport = [
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.QR_CODE,
+      Html5QrcodeSupportedFormats.EAN_13
+    ];
+
+    html5QrCode = new Html5Qrcode("reader", {
+      formatsToSupport: formatsToSupport,
+      verbose: false,
+      experimentalFeatures: {
+        useBarCodeDetectorIfSupported: true
+      }
+    });
   }
+
+  const qrboxFunction = (viewfinderWidth, viewfinderHeight) => {
+    const qrboxWidth = Math.floor(viewfinderWidth * 0.85);
+    const qrboxHeight = Math.max(Math.floor(qrboxWidth / 2.2), 90);
+    return { width: qrboxWidth, height: qrboxHeight };
+  };
+
+  const videoConstraints = {
+    facingMode: { ideal: "environment" },
+    width: { ideal: 1920, min: 1280 },
+    height: { ideal: 1080, min: 720 },
+    advanced: [{ focusMode: "continuous" }]
+  };
+
   html5QrCode.start(
-    { facingMode: "environment" },
-    { fps: 15, qrbox: { width: 260, height: 160 } },
+    videoConstraints,
+    {
+      fps: 12,
+      qrbox: qrboxFunction,
+      aspectRatio: 1.0
+    },
     (decodedText) => {
-      // 若處於冷卻鎖定中，略過解碼
       if (isCoolingDown) return;
 
       isCoolingDown = true;
       playBeep();
 
-      // 暫停鏡頭解碼運算
       try {
         if (html5QrCode.getState() === Html5QrcodeScannerState.SCANNING) {
           html5QrCode.pause();
@@ -346,7 +416,8 @@ function startCamera() {
     },
     () => {}
   ).catch(err => {
-    console.warn(err);
+    // 若為桌上型 PC 或使用者未授予相機權限，維持正常輸入功能，不噴出阻斷性報錯
+    console.warn("未偵測到相機或相機權限受限（PC 條碼槍可照常使用）:", err);
   });
 }
 
@@ -363,14 +434,17 @@ function resumeCamera() {
   }
 }
 
+// 重啟相機
 function restartCamera() {
-  if (html5QrCode) {
+  if (html5QrCode && html5QrCode.isScanning) {
     html5QrCode.stop().then(() => {
       isCoolingDown = false;
       document.getElementById("btnResumeScan").style.display = "none";
       startCamera();
     }).catch(() => startCamera());
   } else {
+    isCoolingDown = false;
+    document.getElementById("btnResumeScan").style.display = "none";
     startCamera();
   }
 }
@@ -385,6 +459,7 @@ async function submitNewAsset() {
 
   if (!assetId) {
     alert("請先掃描或輸入資產編號！");
+    focusTargetInput();
     return;
   }
 
@@ -411,16 +486,14 @@ async function submitNewAsset() {
     const result = await res.json();
 
     if (result.success) {
-      showMsg("addStatus", `✅ [${assetId}] 已成功建立！照片已上傳。`, "success");
-      // 重置欄位
+      showMsg("addStatus", `✅ [${assetId}] 已成功建立！`, "success");
       document.getElementById("addAssetId").value = "";
       document.getElementById("addSpec").value = "";
       document.getElementById("previewImg").style.display = "none";
       document.getElementById("photoPlaceholder").style.display = "block";
       base64Image = "";
-
-      // 新增完成後自動解除鎖定，準備掃下一台
       resumeCamera();
+      focusTargetInput();
     } else {
       showMsg("addStatus", `❌ ${result.message}`, "error");
     }
@@ -437,6 +510,7 @@ async function fetchAssetDetail() {
   const assetId = document.getElementById("searchAssetId").value.trim();
   if (!assetId) {
     alert("請輸入或掃描資產編號！");
+    focusTargetInput();
     return;
   }
 
@@ -470,6 +544,8 @@ async function fetchAssetDetail() {
     }
   } catch (err) {
     showMsg("searchStatus", "查詢連線失敗：" + err.message, "error");
+  } finally {
+    focusTargetInput();
   }
 }
 
@@ -486,8 +562,8 @@ async function markAsAudited() {
     if (result.success) {
       alert("✅ 盤點成功！試算表狀態已更新。");
       document.getElementById("resStatus").innerText = "已盤點 (剛剛)";
-      // 盤點完自動恢復掃描，方便直接對準下一件
       resumeCamera();
+      focusTargetInput();
     } else {
       alert("更新失敗：" + result.message);
     }
@@ -503,7 +579,36 @@ function showMsg(id, text, type) {
   el.innerText = text;
 }
 
-window.addEventListener("load", startCamera);
+// PC 條碼槍鍵盤監聽與初始化
+window.addEventListener("load", () => {
+  startCamera();
+  focusTargetInput();
+
+  const addInput = document.getElementById("addAssetId");
+  const searchInput = document.getElementById("searchAssetId");
+
+  // 新增模式：條碼槍掃描後帶出 Enter，自動跳到下一欄位填寫規格
+  if (addInput) {
+    addInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        playBeep();
+        document.getElementById("addSpec").focus();
+      }
+    });
+  }
+
+  // 查詢模式：條碼槍掃描後帶出 Enter，直接自動發送查詢
+  if (searchInput) {
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        playBeep();
+        fetchAssetDetail();
+      }
+    });
+  }
+});
 </script>
 
 </body>
